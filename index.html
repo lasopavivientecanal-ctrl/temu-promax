@@ -1,0 +1,586 @@
+DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Temu Quality Control 3D - Road Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
+        canvas { display: block; }
+        .ui-overlay {
+            position: absolute;
+            top: 20px;
+          <!  left: 20px;
+            pointer-events: none;
+            color: white;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+        .crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 10;
+        }
+        #power-msg {
+            position: absolute;
+            bottom: 20%;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 2rem;
+            font-weight: 900;
+            color: #ffffff;
+            text-shadow: 0 0 15px rgba(255,255,255,0.8);
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            z-index: 10;
+        }
+        /* Viñetas */
+        #power-vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            background: radial-gradient(circle, rgba(255,255,255,0) 50%, rgba(255,255,255,0.2) 100%);
+            opacity: 0; transition: opacity 0.5s ease; z-index: 5;
+        }
+        #fire-vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            background: radial-gradient(circle, rgba(255,0,0,0) 40%, rgba(200,0,0,0.4) 100%);
+            opacity: 0; transition: opacity 0.5s ease; z-index: 6;
+            animation: fire-pulse 2s infinite alternate;
+        }
+        #ice-vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            background: radial-gradient(circle, rgba(0,255,255,0) 40%, rgba(0,150,255,0.3) 100%);
+            opacity: 0; transition: opacity 0.5s ease; z-index: 7;
+        }
+        @keyframes fire-pulse {
+            from { transform: scale(1); opacity: 0.3; }
+            to { transform: scale(1.05); opacity: 0.6; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="crosshair"></div>
+<div id="power-vignette"></div>
+<div id="fire-vignette" style="display: none;"></div>
+<div id="ice-vignette" style="display: none;"></div>
+<div id="power-msg">¡PODER ACTIVADO!</div>
+
+<div class="ui-overlay">
+    <h1 class="text-4xl font-black italic text-orange-500">TEMU QC 3D: ELEMENTAL</h1>
+    <p class="text-2xl">Puntos: <span id="score">0</span></p>
+    <p class="text-xl">Integridad: <span id="health">100</span>%</p>
+    <p class="text-sm mt-2">Nivel de Logística: <span id="difficulty-lv">1</span></p>
+</div>
+
+<script>
+    let scene, camera, renderer, raycaster, ambientLight;
+    let score = 0;
+    let health = 100;
+    let enemies = [];
+    let hitParticles = [];
+    let fireParticles = []; 
+    let mouse = new THREE.Vector2();
+    let shotgun, muzzleLight;
+    let roadLines = []; // Para animar la carretera
+    
+    // Configuración de poderes
+    let slowMo = 1.0;
+    let rapidFire = false;
+    let firePower = false;
+    let icePower = false;
+    let lastShotTime = 0;
+    let powerActiveCount = 0; 
+
+    // Materiales
+    let normalMaterial, rainbowMaterial, bodyMaterial, rainbowBodyMaterial, fireMaterial, iceMaterial;
+
+    const MAX_ENEMIES_BASE = 20;
+    let currentMaxEnemies = 20;
+    let spawnRate = 0.035;
+
+    // Colores de entorno
+    const COLOR_NORMAL_BG = new THREE.Color(0x050505);
+    const COLOR_FIRE_BG = new THREE.Color(0x220500);
+    const COLOR_ICE_BG = new THREE.Color(0x001122);
+
+    function createBoxTexture(isPower = false) {
+        const canvasTexture = document.createElement('canvas');
+        canvasTexture.width = 256; canvasTexture.height = 256;
+        const ctx = canvasTexture.getContext('2d');
+        ctx.fillStyle = isPower ? '#00f2ff' : '#ff6600';
+        ctx.fillRect(0, 0, 256, 256);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 15;
+        ctx.strokeRect(0, 0, 256, 256);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 50px Arial';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        if (isPower) ctx.fillText('⚡', 128, 128);
+        else {
+            ctx.fillText('TEMU', 128, 100);
+            ctx.font = 'bold 30px Arial';
+            ctx.fillText('corp.', 128, 150);
+        }
+        return new THREE.CanvasTexture(canvasTexture);
+    }
+
+    function createShotgunTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512; canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#222222'; ctx.fillRect(0, 0, 512, 128);
+        ctx.fillStyle = '#ff6600'; ctx.font = 'bold 50px Impact';
+        ctx.fillText('TEMU POWER-SHOT', 40, 80);
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    const boxTexture = createBoxTexture(false);
+    const powerTexture = createBoxTexture(true);
+    const shotgunTexture = createShotgunTexture();
+
+    function init() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(COLOR_NORMAL_BG);
+        scene.fog = new THREE.Fog(0x050505, 20, 100);
+
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 2.5, 10);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        raycaster = new THREE.Raycaster();
+
+        ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+
+        const light = new THREE.DirectionalLight(0xffffff, 0.8);
+        light.position.set(5, 10, 5);
+        light.castShadow = true;
+        scene.add(light);
+
+        muzzleLight = new THREE.PointLight(0xffaa00, 0, 25);
+        scene.add(muzzleLight);
+
+        // --- CREACIÓN DE LA CARRETERA ---
+        const roadGroup = new THREE.Group();
+        
+        // Asfalto (Ancho 30m, Largo 200m)
+        const asphalt = new THREE.Mesh(
+            new THREE.PlaneGeometry(30, 200), 
+            new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.8 })
+        );
+        asphalt.rotation.x = -Math.PI / 2;
+        asphalt.receiveShadow = true;
+        roadGroup.add(asphalt);
+
+        // Arcén (Hierba/Tierra oscura lateral)
+        const shoulderLeft = new THREE.Mesh(
+            new THREE.PlaneGeometry(40, 200),
+            new THREE.MeshStandardMaterial({ color: 0x050505 })
+        );
+        shoulderLeft.rotation.x = -Math.PI / 2;
+        shoulderLeft.position.set(-35, -0.05, 0);
+        roadGroup.add(shoulderLeft);
+
+        const shoulderRight = new THREE.Mesh(
+            new THREE.PlaneGeometry(40, 200),
+            new THREE.MeshStandardMaterial({ color: 0x050505 })
+        );
+        shoulderRight.rotation.x = -Math.PI / 2;
+        shoulderRight.position.set(35, -0.05, 0);
+        roadGroup.add(shoulderRight);
+
+        // Líneas de la carretera (Marcas amarillas discontinuas)
+        const lineGeo = new THREE.PlaneGeometry(0.5, 4);
+        const lineMat = new THREE.MeshStandardMaterial({ color: 0xffcc00, emissive: 0xffcc00, emissiveIntensity: 0.2 });
+        
+        for (let i = -100; i < 100; i += 10) {
+            const line = new THREE.Mesh(lineGeo, lineMat);
+            line.rotation.x = -Math.PI / 2;
+            line.position.set(0, 0.02, i);
+            roadGroup.add(line);
+            roadLines.push(line);
+        }
+        
+        scene.add(roadGroup);
+
+        // --- FIN CARRETERA ---
+
+        normalMaterial = new THREE.MeshStandardMaterial({ map: shotgunTexture });
+        rainbowMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0xffffff, metalness: 0.8, roughness: 0.1, emissiveIntensity: 0.5
+        });
+        fireMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0xff4400, emissive: 0xff2200, emissiveIntensity: 2, metalness: 0.5, roughness: 0.1
+        });
+        iceMaterial = new THREE.MeshStandardMaterial({
+            color: 0x00ffff, emissive: 0x0099ff, emissiveIntensity: 1.5, metalness: 0.9, roughness: 0.05
+        });
+        bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x111111 });
+        rainbowBodyMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0xffffff, metalness: 0.6, roughness: 0.2 
+        });
+
+        shotgun = new THREE.Group();
+        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 4.5, 16), normalMaterial);
+        barrel.name = "barrel"; barrel.rotation.x = Math.PI / 2; barrel.position.z = -2;
+        shotgun.add(barrel);
+
+        const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 1.8), bodyMaterial);
+        body.name = "body"; body.position.z = -0.5;
+        shotgun.add(body);
+
+        shotgun.position.set(1.4, 1.2, 8.5); 
+        scene.add(shotgun);
+
+        window.addEventListener('resize', onWindowResize);
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mousedown', () => shoot());
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function onMouseMove(event) {
+        mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+        mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        shotgun.rotation.y = -mouse.x * 0.18;
+        shotgun.rotation.x = mouse.y * 0.18;
+        camera.rotation.y = -mouse.x * 0.05;
+        camera.rotation.x = (mouse.y * 0.05) - 0.1;
+        const barrelTip = new THREE.Vector3(0, 0, -4.5);
+        barrelTip.applyMatrix4(shotgun.matrixWorld);
+        muzzleLight.position.copy(barrelTip);
+    }
+
+    function showPowerMsg(text) {
+        const msg = document.getElementById('power-msg');
+        msg.innerText = text; msg.style.opacity = '1';
+        setTimeout(() => { msg.style.opacity = '0'; }, 2000);
+    }
+
+    function updateVignettes() {
+        document.getElementById('power-vignette').style.opacity = powerActiveCount > 0 ? "1" : "0";
+        document.getElementById('fire-vignette').style.display = firePower ? "block" : "none";
+        document.getElementById('fire-vignette').style.opacity = firePower ? "1" : "0";
+        document.getElementById('ice-vignette').style.display = icePower ? "block" : "none";
+        document.getElementById('ice-vignette').style.opacity = icePower ? "1" : "0";
+    }
+
+    function updateShotgunSkin() {
+        shotgun.traverse((child) => {
+            if (child.isMesh) {
+                if (child.name === "barrel") {
+                    if (rapidFire) child.material = rainbowMaterial;
+                    else if (firePower) child.material = fireMaterial;
+                    else if (icePower) child.material = iceMaterial;
+                    else child.material = normalMaterial;
+                }
+                if (child.name === "body") {
+                    if (rapidFire) child.material = rainbowBodyMaterial;
+                    else if (firePower) child.material = fireMaterial;
+                    else if (icePower) child.material = iceMaterial;
+                    else child.material = bodyMaterial;
+                }
+            }
+        });
+    }
+
+    function activateRandomPower() {
+        const powers = ["FAST_FIRE", "FIRE_MODE", "ICE_MODE", "SLOW_MO"];
+        const rand = powers[Math.floor(Math.random() * powers.length)];
+        
+        powerActiveCount++;
+        updateVignettes();
+
+        if (rand === "FAST_FIRE") {
+            rapidFire = true;
+            updateShotgunSkin(); 
+            showPowerMsg("¡ESCOPETA RAINBOW RÁPIDA!");
+            setTimeout(() => { 
+                rapidFire = false; updateShotgunSkin();
+                powerActiveCount--; updateVignettes();
+            }, 8000);
+        } else if (rand === "FIRE_MODE") {
+            firePower = true;
+            updateShotgunSkin();
+            updateVignettes();
+            showPowerMsg("¡INFERNO MODE ACTIVADO!");
+            setTimeout(() => { 
+                firePower = false; 
+                updateShotgunSkin();
+                powerActiveCount--; 
+                updateVignettes();
+                evaporateBurntEnemies();
+            }, 8000);
+        } else if (rand === "ICE_MODE") {
+            icePower = true;
+            updateShotgunSkin();
+            updateVignettes();
+            showPowerMsg("¡FROST MODE: CONGELACIÓN!");
+            setTimeout(() => {
+                icePower = false; updateShotgunSkin();
+                powerActiveCount--; updateVignettes();
+            }, 8000);
+        } else if (rand === "SLOW_MO") {
+            slowMo = 0.25;
+            showPowerMsg("CÁMARA LENTA (TIEMPO)");
+            setTimeout(() => { 
+                slowMo = 1.0; 
+                powerActiveCount--; updateVignettes();
+            }, 6000);
+        }
+    }
+
+    function evaporateBurntEnemies() {
+        enemies.forEach(e => {
+            if (e.burnProgress > 0.1 && !e.isPower) {
+                e.evaporate();
+            }
+        });
+    }
+
+    function createParticle(position, color, isAmbient = false, isEvaporation = false) {
+        const p = new THREE.Mesh(
+            new THREE.BoxGeometry(0.15, 0.15, 0.15),
+            new THREE.MeshBasicMaterial({ color: color, transparent: true })
+        );
+        p.position.copy(position);
+        
+        if (isEvaporation) {
+            p.velocity = new THREE.Vector3(
+                (Math.random() - 0.5) * 0.1,
+                Math.random() * 0.4 + 0.2,
+                (Math.random() - 0.5) * 0.1
+            );
+            p.life = 1.0; 
+            p.decay = 0.01 + Math.random() * 0.02;
+            fireParticles.push(p);
+        } else if (isAmbient) {
+            p.velocity = new THREE.Vector3((Math.random() - 0.5) * 0.1, Math.random() * 0.2 + 0.1, (Math.random() - 0.5) * 0.1);
+            p.life = 1.0; p.decay = 0.03 + Math.random() * 0.02;
+            fireParticles.push(p);
+        } else {
+            p.velocity = new THREE.Vector3((Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6, (Math.random() - 0.5) * 0.6);
+            p.life = 1.0; p.decay = 0.02 + Math.random() * 0.03;
+            hitParticles.push(p);
+        }
+        scene.add(p);
+    }
+
+    function shoot() {
+        const now = Date.now();
+        if (!rapidFire && now - lastShotTime < 500) return;
+        if (rapidFire && now - lastShotTime < 100) return;
+        lastShotTime = now;
+        shotgun.position.z += (rapidFire ? 0.2 : 0.6);
+        muzzleLight.intensity = (firePower || icePower) ? 15 : 7;
+        
+        if (icePower) muzzleLight.color.setHex(0x00ffff);
+        else if (firePower) muzzleLight.color.setHex(0xff4400);
+        else muzzleLight.color.setHex(0xffaa00);
+
+        raycaster.setFromCamera(mouse, camera);
+        const intersects = raycaster.intersectObjects(enemies.map(e => e.mesh));
+        if (intersects.length > 0) {
+            const point = intersects[0].point;
+            const enemy = enemies.find(e => e.mesh === intersects[0].object);
+            if (enemy) {
+                let pColor = 0xff6600;
+                if (icePower) pColor = 0xccffff;
+                else if (firePower) pColor = 0xffaa00;
+                
+                for(let i=0; i<(firePower || icePower ? 25 : 12); i++) createParticle(point, pColor);
+                enemy.hit();
+            }
+        }
+    }
+
+    class Enemy {
+        constructor() {
+            this.isPower = Math.random() < 0.1;
+            const size = this.isPower ? 1.5 : (1.0 + Math.random() * 0.4);
+            this.mesh = new THREE.Mesh(
+                new THREE.BoxGeometry(size, size, size),
+                new THREE.MeshStandardMaterial({ 
+                    map: this.isPower ? powerTexture : boxTexture,
+                    emissive: this.isPower ? 0x00f2ff : 0x000000,
+                    emissiveIntensity: this.isPower ? 0.5 : 0
+                })
+            );
+            // Spawn ajustado al ancho de la carretera
+            this.mesh.position.set((Math.random() - 0.5) * 20, size/2, -85);
+            this.mesh.castShadow = true;
+            this.hp = this.isPower ? 1 : (2 + score / 15000);
+            this.speed = (0.2 + (score / 15000)) * (this.isPower ? 1.1 : 1.0);
+            this.hitTimer = 0;
+            this.burnProgress = 0;
+            this.isEvaporating = false;
+            scene.add(this.mesh);
+        }
+
+        update() {
+            if (this.isEvaporating) return true;
+
+            if (!icePower) {
+                this.mesh.position.z += this.speed * slowMo;
+                this.mesh.rotation.y += (0.02 * (this.isPower ? 2 : 1)) * slowMo;
+            }
+
+            if (firePower && !this.isPower) {
+                this.burnProgress = Math.min(1, this.burnProgress + 0.005);
+                if (Math.random() < 0.3) {
+                    const offset = new THREE.Vector3((Math.random()-0.5)*1.5, (Math.random()-0.5)*1.5, (Math.random()-0.5)*1.5);
+                    createParticle(this.mesh.position.clone().add(offset), 0xff4400, true);
+                }
+            }
+
+            if (this.hitTimer > 0) {
+                this.hitTimer -= 0.1;
+                if (icePower) this.mesh.material.color.setRGB(0, 0.8, 1);
+                else if (firePower) this.mesh.material.color.setRGB(1, 0.4, 0);
+                else this.mesh.material.color.setRGB(1, 0, 0);
+            } else {
+                if (icePower && !this.isPower) {
+                    this.mesh.material.color.setRGB(0.5, 0.9, 1);
+                } else {
+                    const c = 1.0 - this.burnProgress;
+                    this.mesh.material.color.setRGB(c, c, c);
+                }
+            }
+
+            if (this.mesh.position.z > 15) {
+                if (!this.isPower) health = Math.max(0, health - 5);
+                this.destroy(); return true;
+            }
+            if (this.hp <= 0) {
+                const explodeColor = this.isPower ? 0x00f2ff : (icePower ? 0xaaffff : (firePower ? 0xff4400 : 0xff6600));
+                for(let i=0; i<20; i++) createParticle(this.mesh.position, explodeColor);
+                if (this.isPower) activateRandomPower();
+                else {
+                    score += 100;
+                    if (Math.random() < 0.05) health = Math.min(100, health + 1);
+                }
+                this.destroy(); return true;
+            }
+            return false;
+        }
+
+        evaporate() {
+            this.isEvaporating = true;
+            const pos = this.mesh.position.clone();
+            for(let i=0; i<40; i++) {
+                const offset = new THREE.Vector3((Math.random()-0.5)*2, (Math.random()-0.5)*1, (Math.random()-0.5)*2);
+                const color = Math.random() > 0.3 ? 0x111111 : 0xff4400;
+                createParticle(pos.clone().add(offset), color, false, true);
+            }
+            this.destroy();
+        }
+
+        hit() {
+            this.hp -= (firePower || icePower) ? 2.5 : 1.0;
+            if (!icePower) this.mesh.position.z -= firePower ? 4 : 2;
+            this.hitTimer = 1.0;
+        }
+        destroy() { scene.remove(this.mesh); }
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // Movimiento de las líneas de la carretera para simular velocidad
+        const roadSpeed = 0.5 * slowMo;
+        roadLines.forEach(line => {
+            line.position.z += roadSpeed;
+            if (line.position.z > 20) {
+                line.position.z = -100;
+            }
+        });
+
+        // Transición de entorno
+        let targetColor = COLOR_NORMAL_BG;
+        if (firePower) targetColor = COLOR_FIRE_BG;
+        if (icePower) targetColor = COLOR_ICE_BG;
+        
+        scene.background.lerp(targetColor, 0.05);
+        scene.fog.color.copy(scene.background);
+        
+        // Luz ambiental dinámica
+        if (firePower) {
+            ambientLight.color.lerp(new THREE.Color(0xffaa66), 0.05);
+            ambientLight.intensity = 0.6;
+        } else if (icePower) {
+            ambientLight.color.lerp(new THREE.Color(0x99ccff), 0.05);
+            ambientLight.intensity = 0.7;
+        } else {
+            ambientLight.color.lerp(new THREE.Color(0xffffff), 0.05);
+            ambientLight.intensity = 0.4;
+        }
+
+        if (rapidFire) {
+            const time = Date.now() * 0.005;
+            const rainbowColor = new THREE.Color().setHSL((time % 1), 0.8, 0.5);
+            rainbowMaterial.color.copy(rainbowColor);
+            rainbowMaterial.emissive.copy(rainbowColor);
+            rainbowBodyMaterial.color.copy(rainbowColor).lerp(new THREE.Color(0x000000), 0.5);
+        }
+
+        if (firePower) {
+            fireMaterial.emissiveIntensity = (Math.sin(Date.now() * 0.01) * 0.5) + 1.5;
+        }
+        if (icePower) {
+            iceMaterial.emissiveIntensity = (Math.sin(Date.now() * 0.02) * 0.3) + 1.2;
+        }
+
+        if (enemies.length < currentMaxEnemies && Math.random() < spawnRate) {
+            enemies.push(new Enemy());
+        }
+
+        for (let i = enemies.length - 1; i >= 0; i--) {
+            if (enemies[i].update()) enemies.splice(i, 1);
+        }
+
+        shotgun.position.z = THREE.MathUtils.lerp(shotgun.position.z, 8.5, 0.15);
+        if (muzzleLight.intensity > 0) muzzleLight.intensity *= 0.82;
+
+        [hitParticles, fireParticles].forEach(list => {
+            for (let i = list.length - 1; i >= 0; i--) {
+                const p = list[i];
+                p.position.add(p.velocity); p.life -= p.decay;
+                p.scale.setScalar(p.life); p.material.opacity = p.life;
+                if (p.life <= 0) { scene.remove(p); list.splice(i, 1); }
+            }
+        });
+
+        document.getElementById('score').innerText = score;
+        document.getElementById('health').innerText = health;
+        document.getElementById('difficulty-lv').innerText = Math.floor(score / 5000) + 1;
+        renderer.render(scene, camera);
+    }
+
+    window.onload = () => { init(); animate(); };
+</script>
+</body>
+</html>
